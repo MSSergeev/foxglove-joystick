@@ -14,6 +14,7 @@ export type Config = {
   layoutName: string;
   mapping_name: string;
   axisDeadzone: number;
+  publishRate: number;
 };
 
 export function settingsActionReducer(prevConfig: Config, action: SettingsTreeAction): Config {
@@ -110,6 +111,15 @@ export function buildSettingsTree(config: Config, topics?: readonly Topic[]): Se
       min: 0,
       max: 0.5,
       step: 0.01,
+      disabled: config.dataSource === "sub-joy-topic",
+    },
+    publishRate: {
+      label: "Publish Rate (Hz)",
+      input: "number",
+      value: config.publishRate,
+      min: 1,
+      max: 100,
+      step: 1,
       disabled: config.dataSource === "sub-joy-topic",
     },
   };

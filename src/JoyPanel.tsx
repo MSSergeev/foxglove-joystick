@@ -29,6 +29,28 @@ function applyDeadzone(axes: number[], deadzone: number): number[] {
   return axes.map((axis) => (Math.abs(axis) < deadzone ? 0.0 : axis));
 }
 
+function joysEqual(a: Joy, b: Joy, deadzone: number = 0.001): boolean {
+  if (a.axes.length !== b.axes.length || a.buttons.length !== b.buttons.length) {
+    return false;
+  }
+
+  // Compare axes with deadzone tolerance
+  for (let i = 0; i < a.axes.length; i++) {
+    if (Math.abs(a.axes[i]! - b.axes[i]!) > deadzone) {
+      return false;
+    }
+  }
+
+  // Compare buttons
+  for (let i = 0; i < a.buttons.length; i++) {
+    if (a.buttons[i] !== b.buttons[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element {
   const [topics, setTopics] = useState<undefined | Immutable<Topic[]>>();
   const [messages, setMessages] = useState<undefined | Immutable<MessageEvent[]>>();
@@ -65,8 +87,61 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
     partialConfig.mapping_name ??= "TODO";
     partialConfig.gamepadId ??= 0;
     partialConfig.axisDeadzone ??= 0.05;
+    partialConfig.publishRate ??= 20;
     return partialConfig as Config;
   });
+
+  // Refs for direct publishing (bypass React state for low latency)
+  const lastPublishTime = useRef<number>(0);
+  const lastUIUpdateTime = useRef<number>(0);
+  const lastPublishedJoy = useRef<Joy | null>(null);
+  const publishContextRef = useRef(context);
+
+  // Update context ref when context changes
+  useEffect(() => {
+    publishContextRef.current = context;
+  }, [context]);
+
+  // Direct publish function (bypasses React state for minimal latency)
+  const publishJoy = useCallback(
+    (newJoy: Joy) => {
+      if (!config.publishMode || !pubTopic) {
+        return;
+      }
+
+      const now = performance.now();
+      const publishInterval = 1000 / config.publishRate;
+
+      // Throttle: check if enough time has passed
+      if (now - lastPublishTime.current < publishInterval) {
+        return;
+      }
+
+      // Change detection: skip if values haven't changed
+      if (lastPublishedJoy.current && joysEqual(newJoy, lastPublishedJoy.current, 0.001)) {
+        return;
+      }
+
+      // Publish directly
+      if (publishContextRef.current.publish) {
+        publishContextRef.current.publish(pubTopic, newJoy);
+        lastPublishTime.current = now;
+        lastPublishedJoy.current = newJoy;
+      }
+    },
+    [config.publishMode, config.publishRate, pubTopic],
+  );
+
+  // Throttled UI update (10 Hz, separate from publish rate)
+  const updateUI = useCallback((newJoy: Joy) => {
+    const now = performance.now();
+    const UI_UPDATE_INTERVAL = 100; // 10 Hz
+
+    if (now - lastUIUpdateTime.current >= UI_UPDATE_INTERVAL) {
+      setJoy(newJoy);
+      lastUIUpdateTime.current = now;
+    }
+  }, []);
 
   const settingsActionHandler = useCallback(
     (action: SettingsTreeAction) => {
@@ -177,9 +252,20 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
           buttons: gp.buttons.map((button) => (button.pressed ? 1 : 0)),
         } as Joy;
 
-        setJoy(tmpJoy);
+        // Direct publish (low latency path)
+        publishJoy(tmpJoy);
+
+        // Update UI (throttled to 10 Hz)
+        updateUI(tmpJoy);
       },
-      [config.dataSource, config.gamepadId, config.publishFrameId, config.axisDeadzone],
+      [
+        config.dataSource,
+        config.gamepadId,
+        config.publishFrameId,
+        config.axisDeadzone,
+        publishJoy,
+        updateUI,
+      ],
     ),
   });
 
@@ -264,8 +350,20 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
       buttons,
     } as Joy;
 
-    setJoy(tmpJoy);
-  }, [config.dataSource, trackedKeys, config.publishFrameId, kbEnabled, config.axisDeadzone]);
+    // Direct publish (low latency path)
+    publishJoy(tmpJoy);
+
+    // Update UI (throttled to 10 Hz)
+    updateUI(tmpJoy);
+  }, [
+    config.dataSource,
+    trackedKeys,
+    config.publishFrameId,
+    kbEnabled,
+    config.axisDeadzone,
+    publishJoy,
+    updateUI,
+  ]);
 
   // Advertise the topic to publish
   useEffect(() => {
@@ -305,24 +403,7 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
     }
   }, [config.pubJoyTopic, config.publishMode, context]);
 
-  // Publish the joy message
-  useEffect(() => {
-    if (!config.publishMode) {
-      return;
-    }
-
-    if (!joy) {
-      return;
-    }
-
-    if (pubTopic && pubTopic === config.pubJoyTopic) {
-      if (context.publish) {
-        context.publish(pubTopic, joy);
-      } else {
-        console.warn("Foxglove: publish() not available - cannot send Joy messages");
-      }
-    }
-  }, [context, config.pubJoyTopic, config.publishMode, joy, pubTopic]);
+  // NOTE: Old useEffect publish removed - now using direct publish in callbacks for low latency
 
   // Invoke the done callback once the render is complete
   useEffect(() => {
@@ -359,9 +440,13 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
         buttons: interactiveJoy.buttons,
       } as Joy;
 
-      setJoy(tmpJoy);
+      // Direct publish (low latency path)
+      publishJoy(tmpJoy);
+
+      // Update UI (throttled to 10 Hz)
+      updateUI(tmpJoy);
     },
-    [config.publishFrameId, config.dataSource, config.axisDeadzone, setJoy],
+    [config.publishFrameId, config.dataSource, config.axisDeadzone, publishJoy, updateUI],
   );
 
   useEffect(() => {

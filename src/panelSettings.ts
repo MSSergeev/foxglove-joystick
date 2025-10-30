@@ -13,6 +13,7 @@ export type Config = {
   debugGamepad: boolean;
   layoutName: string;
   mapping_name: string;
+  axisDeadzone: number;
 };
 
 export function settingsActionReducer(prevConfig: Config, action: SettingsTreeAction): Config {
@@ -101,6 +102,15 @@ export function buildSettingsTree(config: Config, topics?: readonly Topic[]): Se
           value: "todo",
         },
       ],
+    },
+    axisDeadzone: {
+      label: "Axis Deadzone",
+      input: "number",
+      value: config.axisDeadzone,
+      min: 0,
+      max: 0.5,
+      step: 0.01,
+      disabled: config.dataSource === "sub-joy-topic",
     },
   };
   const publishFields: SettingsTreeFields = {

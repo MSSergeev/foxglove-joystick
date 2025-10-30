@@ -25,6 +25,10 @@ type KbMap = {
   value: number;
 };
 
+function applyDeadzone(axes: number[], deadzone: number): number[] {
+  return axes.map((axis) => (Math.abs(axis) < deadzone ? 0.0 : axis));
+}
+
 function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element {
   const [topics, setTopics] = useState<undefined | Immutable<Topic[]>>();
   const [messages, setMessages] = useState<undefined | Immutable<MessageEvent[]>>();
@@ -60,6 +64,7 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
     partialConfig.layoutName ??= "steamdeck";
     partialConfig.mapping_name ??= "TODO";
     partialConfig.gamepadId ??= 0;
+    partialConfig.axisDeadzone ??= 0.05;
     return partialConfig as Config;
   });
 
@@ -165,13 +170,16 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
             frame_id: config.publishFrameId,
             stamp: fromDate(new Date()), // TODO: /clock
           },
-          axes: gp.axes.map((axis) => -axis),
+          axes: applyDeadzone(
+            gp.axes.map((axis) => -axis),
+            config.axisDeadzone,
+          ),
           buttons: gp.buttons.map((button) => (button.pressed ? 1 : 0)),
         } as Joy;
 
         setJoy(tmpJoy);
       },
-      [config.dataSource, config.gamepadId, config.publishFrameId],
+      [config.dataSource, config.gamepadId, config.publishFrameId, config.axisDeadzone],
     ),
   });
 
@@ -252,12 +260,12 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
         frame_id: config.publishFrameId,
         stamp: fromDate(new Date()), // TODO: /clock
       },
-      axes,
+      axes: applyDeadzone(axes, config.axisDeadzone),
       buttons,
     } as Joy;
 
     setJoy(tmpJoy);
-  }, [config.dataSource, trackedKeys, config.publishFrameId, kbEnabled]);
+  }, [config.dataSource, trackedKeys, config.publishFrameId, kbEnabled, config.axisDeadzone]);
 
   // Advertise the topic to publish
   useEffect(() => {
@@ -267,7 +275,17 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
           if (oldTopic) {
             context.unadvertise?.(oldTopic);
           }
-          context.advertise?.(config.pubJoyTopic, "sensor_msgs/Joy");
+          // Detect ROS1 vs ROS2 schema naming
+          // ROS1: sensor_msgs/Joy, ROS2: sensor_msgs/msg/Joy
+          const schemaName = context.dataSourceProfile === "ros1"
+            ? "sensor_msgs/Joy"
+            : "sensor_msgs/msg/Joy";
+
+          if (context.advertise) {
+            context.advertise(config.pubJoyTopic, schemaName);
+          } else {
+            console.warn("Foxglove: advertise() not available - publishing may not work");
+          }
           return config.pubJoyTopic;
         } else {
           if (oldTopic) {
@@ -275,6 +293,14 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
           }
           return "";
         }
+      });
+    } else {
+      // Clean up advertisement when publish mode is disabled
+      setPubTopic((oldTopic) => {
+        if (oldTopic) {
+          context.unadvertise?.(oldTopic);
+        }
+        return undefined;
       });
     }
   }, [config.pubJoyTopic, config.publishMode, context]);
@@ -285,8 +311,16 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
       return;
     }
 
+    if (!joy) {
+      return;
+    }
+
     if (pubTopic && pubTopic === config.pubJoyTopic) {
-      context.publish?.(pubTopic, joy);
+      if (context.publish) {
+        context.publish(pubTopic, joy);
+      } else {
+        console.warn("Foxglove: publish() not available - cannot send Joy messages");
+      }
     }
   }, [context, config.pubJoyTopic, config.publishMode, joy, pubTopic]);
 
@@ -321,13 +355,13 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
           frame_id: config.publishFrameId,
           stamp: fromDate(new Date()), // TODO: /clock
         },
-        axes: interactiveJoy.axes,
+        axes: applyDeadzone(interactiveJoy.axes, config.axisDeadzone),
         buttons: interactiveJoy.buttons,
       } as Joy;
 
       setJoy(tmpJoy);
     },
-    [config.publishFrameId, config.dataSource, setJoy],
+    [config.publishFrameId, config.dataSource, config.axisDeadzone, setJoy],
   );
 
   useEffect(() => {

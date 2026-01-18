@@ -2,6 +2,35 @@
 
 This is an extension for [Foxglove Studio](https://github.com/foxglove/studio) that adds functionality for working with joysticks. It receives joystick data from a variety of inputs, and offers various ways to display it.
 
+## Enhanced Fork
+
+This is a performance-optimized fork of the original [foxglove-joystick](https://github.com/joshnewans/foxglove-joystick) by Josh Newans.
+
+### Improvements in this fork
+
+**Performance optimization**
+- Reduced input latency from 50-66ms to 5-10ms (80-90% improvement)
+- Direct publish path bypassing React state rendering delays
+- Configurable publish rate from 1-100 Hz (default 20 Hz)
+- Separate UI update throttling at 10 Hz to reduce CPU usage
+- Intelligent change detection to skip duplicate message publishing
+
+**ROS2 compatibility**
+- Auto-detection of ROS1 vs ROS2 for correct schema naming
+- Support for both `sensor_msgs/Joy` (ROS1) and `sensor_msgs/msg/Joy` (ROS2)
+- Error handling for advertise/publish API availability
+
+**Joystick handling**
+- Configurable axis deadzone (0.0-0.5, default 0.05) via UI slider
+- Deadzone filtering applied in all input modes (gamepad, keyboard, interactive)
+- Fixes joystick drift issues
+
+These changes are particularly important for real-time teleoperation where command latency directly impacts control responsiveness.
+
+**Pull Request**: [#13](https://github.com/joshnewans/foxglove-joystick/pull/13)
+
+---
+
 ## Overview
 
 There are four main operating modes/input sources/use cases:

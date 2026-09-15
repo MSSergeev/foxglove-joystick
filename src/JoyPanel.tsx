@@ -132,6 +132,48 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
     [config.publishMode, config.publishRate, pubTopic],
   );
 
+  // Heartbeat: repeat the last frame at publishRate while publish mode is on.
+  // Change-only publishing starves subscribers with a deadman (a robot stops
+  // 0.5 s after the last command even though the stick is still held).
+  useEffect(() => {
+    if (!config.publishMode || !pubTopic) {
+      return;
+    }
+    const interval = 1000 / config.publishRate;
+    const id = setInterval(() => {
+      const last = lastPublishedJoy.current;
+      const ctx = publishContextRef.current;
+      if (!last || !ctx.publish) {
+        return;
+      }
+      const now = performance.now();
+      // Only while live frames are absent (held stick = no change = no
+      // publish). Never touch lastPublishTime: the heartbeat must not win the
+      // throttle race against live frames (it did — the stick moved, the
+      // stream stayed frozen on the first frame).
+      if (now - lastPublishTime.current < interval * 1.5) {
+        return;
+      }
+      // Unfocused window: Chromium freezes gamepad state and rAF stalls, so
+      // the last frame would be replayed forever — send zeros instead (robot
+      // stops), keep the stream alive so the receiver's deadman is not the
+      // thing that saves us.
+      const header = { ...last.header, stamp: fromDate(new Date()) };
+      const frame = document.hasFocus()
+        ? ({ ...last, header } as Joy)
+        : ({
+            ...last,
+            header,
+            axes: last.axes.map(() => 0),
+            buttons: last.buttons.map(() => 0),
+          } as Joy);
+      ctx.publish(pubTopic, frame);
+    }, interval);
+    return () => {
+      clearInterval(id);
+    };
+  }, [config.publishMode, config.publishRate, pubTopic]);
+
   // Throttled UI update (10 Hz, separate from publish rate)
   const updateUI = useCallback((newJoy: Joy) => {
     const now = performance.now();
@@ -236,7 +278,9 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
           return;
         }
 
-        if (config.gamepadId !== gp.index) {
+        // The settings select stores the id as a string ("1"), gp.index is a
+        // number: a strict compare silently drops every frame of pad #1+.
+        if (Number(config.gamepadId) !== gp.index) {
           return;
         }
 
@@ -375,9 +419,8 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
           }
           // Detect ROS1 vs ROS2 schema naming
           // ROS1: sensor_msgs/Joy, ROS2: sensor_msgs/msg/Joy
-          const schemaName = context.dataSourceProfile === "ros1"
-            ? "sensor_msgs/Joy"
-            : "sensor_msgs/msg/Joy";
+          const schemaName =
+            context.dataSourceProfile === "ros1" ? "sensor_msgs/Joy" : "sensor_msgs/msg/Joy";
 
           if (context.advertise) {
             context.advertise(config.pubJoyTopic, schemaName);
@@ -465,11 +508,7 @@ function JoyPanel({ context }: { context: PanelExtensionContext }): JSX.Element 
       ) : null}
       {config.displayMode === "auto" ? <SimpleButtonView joy={joy} /> : null}
       {config.displayMode === "custom" ? (
-        <GamepadView
-          joy={joy}
-          cbInteractChange={interactiveCb}
-          layoutName={config.layoutName}
-        />
+        <GamepadView joy={joy} cbInteractChange={interactiveCb} layoutName={config.layoutName} />
       ) : null}
       {/* {config.debugGamepad ? <GamepadDebug gamepads={gamepads} /> : null} */}
     </div>
